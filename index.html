@@ -1,1 +1,262 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>〇〇の視界シミュレーター</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      text-align: center;
+      background: #1a1a1a;
+      color: #eee;
+      margin: 0;
+      padding: 15px;
+    }
+    h2 { margin-bottom: 5px; }
+    p { font-size: 0.9rem; color: #bbb; margin-top: 0; }
+    video { display: none; }
 
+    .camera-container {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 15px;
+      max-width: 900px;
+      margin: 0 auto;
+    }
+
+    canvas {
+      max-width: 80%;
+      height: auto;
+      border: 2px solid #444;
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+      object-fit: contain;
+    }
+
+    .side-controls {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .white-shutter-btn {
+      width: 55px;
+      height: 55px;
+      border-radius: 50%;
+      background: #ffffff;
+      border: none;
+      cursor: pointer;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.4);
+      transition: transform 0.1s, opacity 0.2s;
+    }
+    .white-shutter-btn:active {
+      transform: scale(0.92);
+      opacity: 0.8;
+    }
+
+    .action-group {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .action-btn {
+      background: #333;
+      color: #fff;
+      border: 1px solid #555;
+      padding: 10px 14px;
+      border-radius: 12px;
+      cursor: pointer;
+      font-size: 0.85rem;
+      white-space: nowrap;
+      transition: background 0.2s;
+    }
+    .action-btn:hover {
+      background: #555;
+    }
+    .action-btn.primary {
+      background: #27ae60;
+      border-color: #2ecc71;
+    }
+
+    .bottom-controls {
+      margin-top: 15px;
+      font-size: 0.85rem;
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
+    @media (max-width: 600px) {
+      .camera-container {
+        flex-direction: column;
+      }
+      canvas {
+        max-width: 100%;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <h2>何の動物でしょう？</h2>
+
+  <div class="camera-container">
+    <video id="webcam" autoplay playsinline></video>
+    <canvas id="output"></canvas>
+
+    <div class="side-controls">
+      <div id="shutterContainer">
+        <button id="shutterBtn" class="white-shutter-btn" title="写真を撮影"></button>
+      </div>
+
+      <div id="actionContainer" class="action-group hidden">
+        <button id="saveBtn" class="action-btn primary">save</button>
+        <button id="copyBtn" class="action-btn">copy</button>
+        <button id="retakeBtn" class="action-btn">↺</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="bottom-controls">
+    <label>
+      <input type="checkbox" id="blurToggle" checked> 視力を再現する
+    </label>
+  </div>
+<footer style="margin-top: 25px; font-size: 0.7rem; color: #777;">
+    コード制作:Google Gemini
+  </footer>
+
+  <script>
+    const video = document.getElementById('webcam');
+    const canvas = document.getElementById('output');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    
+    const blurToggle = document.getElementById('blurToggle');
+    const shutterContainer = document.getElementById('shutterContainer');
+    const shutterBtn = document.getElementById('shutterBtn');
+    const actionContainer = document.getElementById('actionContainer');
+    const saveBtn = document.getElementById('saveBtn');
+    const copyBtn = document.getElementById('copyBtn');
+    const retakeBtn = document.getElementById('retakeBtn');
+
+    let animationId = null;
+    let isCaptured = false;
+    let streamInstance = null;
+
+    // 猫の2色型色覚変換行列（ローカル変数へ展開用に分割定義）
+    const matrix = [
+      0.567, 0.433, 0.000,
+      0.558, 0.442, 0.000,
+      0.000, 0.242, 0.758
+    ];
+    const [m0, m1, m2, m3, m4, m5, m6, m7, m8] = matrix;
+
+    async function startCamera() {
+      try {
+        streamInstance = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 } },
+          audio: false
+        });
+        video.srcObject = streamInstance;
+        video.onloadedmetadata = () => {
+          canvas.width = video.videoWidth;
+          canvas.height = video.videoHeight;
+          startLoop();
+        };
+      } catch (err) {
+        alert('再読込してカメラの許可をしてください: ' + err.message);
+      }
+    }
+
+    function stopCamera() {
+      if (streamInstance) {
+        streamInstance.getTracks().forEach(track => track.stop());
+        streamInstance = null;
+      }
+    }
+
+    function startLoop() {
+      if (isCaptured) return;
+
+      if (blurToggle.checked) {
+        ctx.filter = 'blur(3px)';
+      } else {
+        ctx.filter = 'none';
+      }
+
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const data = imgData.data;
+
+      for (let i = 0; i < data.length; i += 4) {
+        const r = data[i];
+        const g = data[i + 1];
+        const b = data[i + 2];
+
+        data[i]     = r * m0 + g * m1 + b * m2;
+        data[i + 1] = r * m3 + g * m4 + b * m5;
+        data[i + 2] = r * m6 + g * m7 + b * m8;
+      }
+
+      ctx.filter = 'none';
+      ctx.putImageData(imgData, 0, 0);
+
+      animationId = requestAnimationFrame(startLoop);
+    }
+
+    blurToggle.addEventListener('change', () => {
+      if (isCaptured) {
+        startLoop();
+      }
+    });
+
+    // 撮影（カメラ停止による省電力化）
+    shutterBtn.addEventListener('click', () => {
+      isCaptured = true;
+      if (animationId) cancelAnimationFrame(animationId);
+      stopCamera();
+
+      shutterContainer.classList.add('hidden');
+      actionContainer.classList.remove('hidden');
+    });
+
+    // 撮り直す（カメラ再開）
+    retakeBtn.addEventListener('click', async () => {
+      isCaptured = false;
+      
+      actionContainer.classList.add('hidden');
+      shutterContainer.classList.remove('hidden');
+
+      await startCamera();
+    });
+
+    // 保存
+    saveBtn.addEventListener('click', () => {
+      const link = document.createElement('a');
+      link.download = `animal_vision_${Date.now()}.png`;
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+    });
+
+    // コピー
+    copyBtn.addEventListener('click', async () => {
+      try {
+        canvas.toBlob(async (blob) => {
+          const item = new ClipboardItem({ 'image/png': blob });
+          await navigator.clipboard.write([item]);
+          alert('コピーが完了しました');
+        });
+      } catch (err) {
+        alert('コピーに失敗しました: ' + err.message);
+      }
+    });
+
+    startCamera();
+  </script>
+</body>
+</html>
